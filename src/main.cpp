@@ -7,11 +7,21 @@
 
 #define LED_PIN 8
 
-const char* WIFI_SSID = "SSID";
-const char* WIFI_PASS = "Password";
+struct WiFiCred {
+  const char* ssid;
+  const char* pass;
+};
+
+WiFiCred WIFI_LIST[] = {
+  {"HomeWiFi", "home-password"},
+  {"PhoneHotspot", "hotspot-password"},
+  {"OfficeWiFi", "office-password"},
+};
+
 
 AsyncWebServer server(80);
 
+const int WIFI_COUNT = sizeof(WIFI_LIST) / sizeof(WIFI_LIST[0]);
 const char* NTP_SERVER = "pool.ntp.org";
 const long GMT_OFFSET_SEC = 4 * 3600; // Armenia UTC+4
 const int DAYLIGHT_OFFSET_SEC = 0;
@@ -58,20 +68,56 @@ String makeJson() {
   return out;
 }
 
-void connectWiFi() {
+bool connectWiFi() {
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  WiFi.disconnect(true);
+  delay(300);
 
-  Serial.print("Connecting to WiFi");
+  Serial.println("Scanning WiFi...");
+  int n = WiFi.scanNetworks();
 
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  if (n <= 0) {
+    Serial.println("No WiFi networks found");
+    return false;
   }
 
-  Serial.println();
-  Serial.print("Connected. IP: ");
-  Serial.println(WiFi.localIP());
+  for (int i = 0; i < WIFI_COUNT; i++) {
+    for (int j = 0; j < n; j++) {
+      String foundSsid = WiFi.SSID(j);
+
+      if (foundSsid == WIFI_LIST[i].ssid) {
+        Serial.print("Trying WiFi: ");
+        Serial.println(WIFI_LIST[i].ssid);
+
+        WiFi.begin(WIFI_LIST[i].ssid, WIFI_LIST[i].pass);
+
+        unsigned long started = millis();
+        while (WiFi.status() != WL_CONNECTED && millis() - started < 15000) {
+          delay(500);
+          Serial.print(".");
+        }
+
+        Serial.println();
+
+        if (WiFi.status() == WL_CONNECTED) {
+          Serial.print("Connected to: ");
+          Serial.println(WIFI_LIST[i].ssid);
+          Serial.print("IP: ");
+          Serial.println(WiFi.localIP());
+          WiFi.scanDelete();
+          return true;
+        }
+
+        Serial.println("Failed, trying next known network...");
+        WiFi.disconnect();
+        delay(500);
+      }
+    }
+  }
+
+  WiFi.scanDelete();
+  Serial.println("Could not connect to any known WiFi");
+  return false;
 }
 
 void setupRoutes() {
@@ -117,7 +163,11 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 
-  connectWiFi();
+  if (!connectWiFi()) {
+    Serial.println("WiFi connection failed. Restarting in 5 sec...");
+    delay(5000);
+    ESP.restart();
+  }
 
   configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
   Serial.print("NTP time: ");
